@@ -3,6 +3,11 @@ set -e
 
 CONFIG_DIR="/home/agent/.agent-config"
 
+# Fix ownership of config volume (may be created as root by Docker)
+if [ -d "$CONFIG_DIR" ]; then
+    sudo chown -R agent:agent "$CONFIG_DIR" 2>/dev/null || true
+fi
+
 mkdir -p "$CONFIG_DIR"
 
 # Claude Code config at ~/.claude

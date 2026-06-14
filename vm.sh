@@ -268,7 +268,11 @@ cmd_exec() {
     shift
     local name
     name=$(container_name "$project")
-    docker exec -it "$name" "$@"
+    if [ -t 0 ]; then
+        docker exec -it "$name" "$@"
+    else
+        docker exec "$name" "$@"
+    fi
 }
 
 cmd_stop() {
