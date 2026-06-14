@@ -1,0 +1,14 @@
+services:
+  agent-vm:
+    image: agent-vm:latest
+    build: .
+    working_dir: /workspace
+    volumes:
+      - agent-vm-config:/home/agent/.agent-config
+    environment:
+      - HOME=/home/agent
+    stdin_open: true
+    tty: true
+
+volumes:
+  agent-vm-config:
