@@ -64,6 +64,7 @@ docker build -t agent-sandbox:latest .
 |--------|-------------|
 | `-p host:container` | Map port (repeatable) |
 | `-e KEY=VALUE` | Set environment variable (repeatable) |
+| `-e HOST_EXTRA_HOSTS="host:ip"` | Add static hostname entries (comma-separated) |
 | `-- <cmd>` | Override default command (`run` only) |
 
 ## Examples
@@ -82,6 +83,12 @@ docker build -t agent-sandbox:latest .
 **Run OpenCode:**
 ```bash
 ./vm.sh opencode ~/git/my-project
+```
+
+**Run OpenCode with local network host:**
+```bash
+./vm.sh opencode ~/git/my-project \
+  -e HOST_EXTRA_HOSTS="example:192.168.178.2"
 ```
 
 **Run a custom command:**
@@ -151,6 +158,36 @@ For example, an LM Studio provider at `http://localhost:1234/v1` becomes:
 
 This works on both Docker Desktop and Colima.
 
+### Local Network Hosts
+
+The container inherits your host's IPv4 DNS servers. For hosts on your local network that aren't resolvable through standard DNS (e.g., mDNS `.local` addresses), use `HOST_EXTRA_HOSTS` to add static hostname entries:
+
+```bash
+./vm.sh opencode ~/git/my-project \
+  -e HOST_EXTRA_HOSTS="mini:192.168.178.138"
+```
+
+This adds `mini` → `192.168.178.138` to the container's `/etc/hosts`, so your provider config can use `http://mini:8001/v1`. You can pass multiple entries separated by commas:
+
+```bash
+-e HOST_EXTRA_HOSTS="mini:192.168.178.138,ollama-server:192.168.1.50"
+```
+
+### Using `.env` Files
+
+For `vm.sh run`, Docker Compose automatically reads `<project>/.env`. For `claude` and `opencode` commands, `vm.sh` also loads `<project>/.env` automatically. CLI flags (`-e`) override `.env` values.
+
+Example `~/git/my-project/.env`:
+```
+HOST_EXTRA_HOSTS=mini:192.168.178.138
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Then just run:
+```bash
+./vm.sh opencode ~/git/my-project
+```
+
 ## Architecture
 
 ```
@@ -165,11 +202,13 @@ agent-sandbox/
 ### How It Works
 
 1. `vm.sh run ~/git/my-project` generates a Docker Compose file in `~/git/my-project/.vm/docker-compose.yml`
-2. The compose file mounts two volumes:
+2. The compose file mounts volumes:
    - Your project directory → `/workspace` (read-write)
    - `agent-sandbox-config` Docker volume → `/home/agent/.agent-config`
-3. The entrypoint creates symlinks so both Claude Code and OpenCode find their config in the shared volume
-4. The container runs as a non-root user (`agent`) with passwordless sudo
+   - Your host `~/.config/opencode` → `/home/agent/.config/opencode` (bind mount)
+3. The entrypoint creates symlinks so Claude Code and OpenCode find their config in the shared volume
+4. Host DNS servers are forwarded into the container, enabling mDNS resolution for local network hosts
+5. The container runs as a non-root user (`agent`) with passwordless sudo
 
 ### Config Volume
 
@@ -178,10 +217,11 @@ The `agent-sandbox-config` Docker volume persists agent configuration, skills, a
 | Symlink | Target | Used By |
 |---------|--------|---------|
 | `~/.claude` | `.agent-config/claude` | Claude Code |
-| `~/.config/opencode` | `.agent-config/opencode` | OpenCode |
 | `~/.agents/skills` | `.agent-config/agents-skills` | Claude Code |
 | `~/.opencode/skills` | `.agent-config/opencode-skills` | OpenCode |
 | `~/.cache/opencode` | `.agent-config/cache-opencode` | OpenCode |
+
+Note: `~/.config/opencode` is bind-mounted directly from your host, so your OpenCode provider config is available automatically.
 
 Use `./vm.sh config` to open a shell and manage these files.
 

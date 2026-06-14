@@ -5,8 +5,10 @@ services:
     working_dir: /workspace
     volumes:
       - agent-sandbox-config:/home/agent/.agent-config
+      - ${HOME}/.config/opencode:/home/agent/.config/opencode
     environment:
       - HOME=/home/agent
+    # dns: auto-injected by vm.sh from host /etc/resolv.conf
     stdin_open: true
     tty: true
 

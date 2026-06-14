@@ -38,6 +38,52 @@ container_name() {
     echo "$1" | sed 's|/|_|g; s|[^a-zA-Z0-9_]|_|g; s|__*|_|g; s|^_||; s|_$||'
 }
 
+host_dns() {
+    # Extract IPv4 nameservers from /etc/resolv.conf for host DNS forwarding
+    grep '^nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}' | grep -E '^[0-9]+\.' | tr '\n' ',' | sed 's/,$//'
+}
+
+extra_hosts_from_env() {
+    # Extract HOST_EXTRA_HOSTS from parsed env vars (format: "host:ip,host2:ip2")
+    local env_vars="$1"
+    local value
+    value=$(echo "$env_vars" | grep '^HOST_EXTRA_HOSTS=' | head -1 | cut -d= -f2-)
+    echo "$value"
+}
+
+extra_hosts_from_file() {
+    # Extract HOST_EXTRA_HOSTS from project/.env file
+    local project="$1"
+    local env_file="$project/.env"
+    if [ -f "$env_file" ]; then
+        grep '^HOST_EXTRA_HOSTS=' "$env_file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'"
+    fi
+}
+
+filter_env_var() {
+    # Filter out a specific key from env vars
+    local key="$1"
+    local env_vars="$2"
+    echo "$env_vars" | grep -v "^${key}=" || true
+}
+
+load_env_file() {
+    # Load KEY=VALUE pairs from project/.env into docker args
+    local project="$1"
+    local env_file="$project/.env"
+    if [ -f "$env_file" ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            # Skip comments and empty lines
+            [[ "$line" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "${line// }" ]] && continue
+            # Extract key=value
+            if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*) ]]; then
+                echo "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
+            fi
+        done < "$env_file"
+    fi
+}
+
 resolve_project() {
     if [[ "$1" = /* ]]; then
         echo "$1"
@@ -144,8 +190,29 @@ generate_compose() {
         echo "    volumes:"
         echo "      - ${project}:/workspace"
         echo "      - agent-sandbox-config:/home/agent/.agent-config"
+        echo "      - ${HOME}/.config/opencode:/home/agent/.config/opencode"
         echo "    environment:"
         echo "      - HOME=/home/agent"
+
+        local dns_servers
+        dns_servers=$(host_dns)
+        if [ -n "$dns_servers" ]; then
+            echo "    dns:"
+            IFS=',' read -ra DNS_ARR <<< "$dns_servers"
+            for dns in "${DNS_ARR[@]}"; do
+                echo "      - ${dns}"
+            done
+        fi
+
+        local extra_hosts
+        extra_hosts=$(extra_hosts_from_env "$env_vars")
+        if [ -n "$extra_hosts" ]; then
+            echo "    extra_hosts:"
+            IFS=',' read -ra EH_ARR <<< "$extra_hosts"
+            for eh in "${EH_ARR[@]}"; do
+                echo "      - ${eh}"
+            done
+        fi
 
         if [ -n "$env_vars" ]; then
             echo "$env_vars" | while IFS= read -r env_var; do
@@ -232,7 +299,49 @@ cmd_claude() {
     local docker_args=(-it --name "$name" -w /workspace)
     docker_args+=(-v "${project}:/workspace")
     docker_args+=(-v "agent-sandbox-config:/home/agent/.agent-config")
+    docker_args+=(-v "${HOME}/.config/opencode:/home/agent/.config/opencode")
     docker_args+=(-e "HOME=/home/agent")
+
+    local dns_servers
+    dns_servers=$(host_dns)
+    if [ -n "$dns_servers" ]; then
+        IFS=',' read -ra DNS_ARR <<< "$dns_servers"
+        for dns in "${DNS_ARR[@]}"; do
+            docker_args+=("--dns" "$dns")
+        done
+    fi
+
+    local extra_hosts
+    extra_hosts=$(extra_hosts_from_env "$PARSED_ENV")
+    if [ -n "$extra_hosts" ]; then
+        IFS=',' read -ra EH_ARR <<< "$extra_hosts"
+        for eh in "${EH_ARR[@]}"; do
+            docker_args+=("--add-host" "$eh")
+        done
+    fi
+
+    # Load .env file from project directory
+    local env_file_vars
+    env_file_vars=$(load_env_file "$project")
+
+    # Also check .env for HOST_EXTRA_HOSTS
+    local file_extra_hosts
+    file_extra_hosts=$(echo "$env_file_vars" | grep '^HOST_EXTRA_HOSTS=' | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    if [ -n "$file_extra_hosts" ]; then
+        IFS=',' read -ra EH_ARR <<< "$file_extra_hosts"
+        for eh in "${EH_ARR[@]}"; do
+            docker_args+=("--add-host" "$eh")
+        done
+    fi
+
+    # Filter HOST_EXTRA_HOSTS from env vars
+    env_file_vars=$(echo "$env_file_vars" | grep -v '^HOST_EXTRA_HOSTS=' || true)
+
+    if [ -n "$env_file_vars" ]; then
+        while IFS= read -r env_var; do
+            [ -n "$env_var" ] && docker_args+=(-e "$env_var")
+        done <<< "$env_file_vars"
+    fi
 
     if [ -n "$PARSED_ENV" ]; then
         while IFS= read -r env_var; do
@@ -268,7 +377,49 @@ cmd_opencode() {
     local docker_args=(-it --name "$name" -w /workspace)
     docker_args+=(-v "${project}:/workspace")
     docker_args+=(-v "agent-sandbox-config:/home/agent/.agent-config")
+    docker_args+=(-v "${HOME}/.config/opencode:/home/agent/.config/opencode")
     docker_args+=(-e "HOME=/home/agent")
+
+    local dns_servers
+    dns_servers=$(host_dns)
+    if [ -n "$dns_servers" ]; then
+        IFS=',' read -ra DNS_ARR <<< "$dns_servers"
+        for dns in "${DNS_ARR[@]}"; do
+            docker_args+=("--dns" "$dns")
+        done
+    fi
+
+    local extra_hosts
+    extra_hosts=$(extra_hosts_from_env "$PARSED_ENV")
+    if [ -n "$extra_hosts" ]; then
+        IFS=',' read -ra EH_ARR <<< "$extra_hosts"
+        for eh in "${EH_ARR[@]}"; do
+            docker_args+=("--add-host" "$eh")
+        done
+    fi
+
+    # Load .env file from project directory
+    local env_file_vars
+    env_file_vars=$(load_env_file "$project")
+
+    # Also check .env for HOST_EXTRA_HOSTS
+    local file_extra_hosts
+    file_extra_hosts=$(echo "$env_file_vars" | grep '^HOST_EXTRA_HOSTS=' | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    if [ -n "$file_extra_hosts" ]; then
+        IFS=',' read -ra EH_ARR <<< "$file_extra_hosts"
+        for eh in "${EH_ARR[@]}"; do
+            docker_args+=("--add-host" "$eh")
+        done
+    fi
+
+    # Filter HOST_EXTRA_HOSTS from env vars
+    env_file_vars=$(echo "$env_file_vars" | grep -v '^HOST_EXTRA_HOSTS=' || true)
+
+    if [ -n "$env_file_vars" ]; then
+        while IFS= read -r env_var; do
+            [ -n "$env_var" ] && docker_args+=(-e "$env_var")
+        done <<< "$env_file_vars"
+    fi
 
     if [ -n "$PARSED_ENV" ]; then
         while IFS= read -r env_var; do
