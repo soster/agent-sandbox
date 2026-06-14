@@ -35,7 +35,7 @@ EOF
 }
 
 container_name() {
-    echo "$1" | sed 's|/|_|g; s|[^a-zA-Z0-9_]|_|g; s|__*|_|g; s|^_||; s|_||'
+    echo "$1" | sed 's|/|_|g; s|[^a-zA-Z0-9_]|_|g; s|__*|_|g; s|^_||; s|_$||'
 }
 
 resolve_project() {
@@ -226,11 +226,22 @@ cmd_claude() {
 
     local name
     name=$(container_name "$project")
-    local compose_file
-    compose_file=$(generate_compose "$project" "$name" "$PARSED_PORTS" "$PARSED_ENV" "claude")
 
     echo "Starting Claude Code in container '${name}' for project '${project}'"
-    docker compose -f "$compose_file" up --attach stdin
+    docker rm -f "$name" 2>/dev/null || true
+    local docker_args=(-it --name "$name" -w /workspace)
+    docker_args+=(-v "${project}:/workspace")
+    docker_args+=(-v "agent-sandbox-config:/home/agent/.agent-config")
+    docker_args+=(-e "HOME=/home/agent")
+
+    if [ -n "$PARSED_ENV" ]; then
+        while IFS= read -r env_var; do
+            [ -n "$env_var" ] && docker_args+=(-e "$env_var")
+        done <<< "$PARSED_ENV"
+    fi
+
+    docker_args+=("${IMAGE_NAME}:latest" claude)
+    docker run "${docker_args[@]}"
 }
 
 cmd_opencode() {
@@ -251,11 +262,22 @@ cmd_opencode() {
 
     local name
     name=$(container_name "$project")
-    local compose_file
-    compose_file=$(generate_compose "$project" "$name" "$PARSED_PORTS" "$PARSED_ENV" "opencode")
 
     echo "Starting OpenCode in container '${name}' for project '${project}'"
-    docker compose -f "$compose_file" up --attach stdin
+    docker rm -f "$name" 2>/dev/null || true
+    local docker_args=(-it --name "$name" -w /workspace)
+    docker_args+=(-v "${project}:/workspace")
+    docker_args+=(-v "agent-sandbox-config:/home/agent/.agent-config")
+    docker_args+=(-e "HOME=/home/agent")
+
+    if [ -n "$PARSED_ENV" ]; then
+        while IFS= read -r env_var; do
+            [ -n "$env_var" ] && docker_args+=(-e "$env_var")
+        done <<< "$PARSED_ENV"
+    fi
+
+    docker_args+=("${IMAGE_NAME}:latest" opencode)
+    docker run "${docker_args[@]}"
 }
 
 cmd_exec() {

@@ -107,6 +107,50 @@ docker build -t agent-sandbox:latest .
 
 Each project gets its own container with a unique name derived from the project path.
 
+## Typical Workflow
+
+```bash
+# 1. Start a container for your project
+./vm.sh run ~/git/my-project -p 3000:3000
+
+# 2. Run Claude Code or OpenCode inside it
+./vm.sh exec ~/git/my-project claude
+./vm.sh exec ~/git/my-project opencode
+
+# 3. Or use the convenience commands (interactive TTY)
+./vm.sh claude ~/git/my-project -e ANTHROPIC_API_KEY=sk-ant-...
+./vm.sh opencode ~/git/my-project
+
+# 4. When done, stop or remove
+./vm.sh stop ~/git/my-project   # keeps container for restart
+./vm.sh rm ~/git/my-project     # removes container and .vm/ directory
+```
+
+## Connecting to Local AI Providers
+
+If you run AI inference servers locally (LM Studio, Ollama, llama.cpp, etc.), the container can reach them using `host.docker.internal` instead of `localhost`:
+
+1. Open the config shell: `./vm.sh config`
+2. Edit `~/.agent-config/opencode/opencode.json` (or `~/.claude/settings.local.json`)
+3. Replace `localhost` / `127.0.0.1` with `host.docker.internal`
+
+For example, an LM Studio provider at `http://localhost:1234/v1` becomes:
+
+```json
+{
+  "provider": {
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://host.docker.internal:1234/v1"
+      }
+    }
+  }
+}
+```
+
+This works on both Docker Desktop and Colima.
+
 ## Architecture
 
 ```
@@ -140,6 +184,38 @@ The `agent-sandbox-config` Docker volume persists agent configuration, skills, a
 | `~/.cache/opencode` | `.agent-config/cache-opencode` | OpenCode |
 
 Use `./vm.sh config` to open a shell and manage these files.
+
+### Per-Project `.vm/` Directory
+
+Each project gets a `.vm/` directory containing its generated `docker-compose.yml`. This directory is:
+- Created automatically by `vm.sh run`
+- Removed by `vm.sh rm`
+- Should be gitignored by the **project** it lives in (not by agent-sandbox itself)
+
+### Container Naming
+
+Container names are derived from the project path by replacing `/` and non-alphanumeric characters with `_`, then stripping leading/trailing underscores. For example:
+
+| Project Path | Container Name |
+|--------------|----------------|
+| `~/git/my-project` | `Users_oster_git_my-project` |
+| `~/Documents/work/app` | `Users_oster_Documents_work_app` |
+
+## Agent Skills
+
+Skills extend agent behavior with specialized instructions and tools. They're stored in the config volume so they persist across containers:
+
+- **Claude Code skills:** `~/.agents/skills/` (symlinked from `.agent-config/agents-skills`)
+- **OpenCode skills:** `~/.opencode/skills/` (symlinked from `.agent-config/opencode-skills`)
+
+Manage skills from the config shell:
+
+```bash
+./vm.sh config
+# Inside the shell:
+ls ~/.agent-config/agents-skills/
+ls ~/.agent-config/opencode-skills/
+```
 
 ## Security
 
@@ -205,6 +281,20 @@ The entrypoint handles this automatically with `sudo chown`. If it persists, reb
 **`/tmp` projects don't mount on macOS**
 
 Colima doesn't share `/tmp` with the VM by default. Use projects in `~/` or another shared directory.
+
+**OpenCode / Claude Code exit immediately**
+
+The agent likely has no AI provider configured. Either:
+- Pass an API key: `./vm.sh claude ~/git/my-project -e ANTHROPIC_API_KEY=sk-ant-...`
+- Configure a local provider using `host.docker.internal` (see "Connecting to Local AI Providers")
+- Run `/connect` inside the agent to add a provider interactively
+
+**Cannot reach local AI server from container**
+
+Use `host.docker.internal` instead of `localhost` in your provider configuration. Verify connectivity:
+```bash
+./vm.sh exec ~/git/my-project curl -s http://host.docker.internal:1234/v1/models
+```
 
 ## License
 
