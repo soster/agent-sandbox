@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-IMAGE_NAME="agent-vm"
+IMAGE_NAME="agent-sandbox"
 
 usage() {
     cat <<EOF

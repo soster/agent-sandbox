@@ -1,6 +1,6 @@
 services:
   agent-vm:
-    image: agent-vm:latest
+    image: agent-sandbox:latest
     build: .
     working_dir: /workspace
     volumes:
