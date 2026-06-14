@@ -28,7 +28,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
 RUN npm install -g @anthropic-ai/claude-code \
     && npm install -g opencode-ai
 
-RUN git config --global user.email "agent@agent-vm.local" \
+RUN git config --global user.email "agent@agent-sandbox.local" \
     && git config --global user.name "Agent"
 
 RUN groupadd -g 1000 agent \

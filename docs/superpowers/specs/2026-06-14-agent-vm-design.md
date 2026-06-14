@@ -1,4 +1,4 @@
-# Agent VM — Isolated Coding Container
+# Agent Sandbox — Isolated Coding Container
 
 **Date:** 2026-06-14
 **Status:** Approved
@@ -19,14 +19,14 @@ We need a sandboxed environment where agents can work on projects with full tool
 A centralized manager project provides a Docker-based dev environment:
 
 ```
-agent-vm/
+agent-sandbox/
 ├── Dockerfile           # Base dev image
 ├── docker-compose.yml   # Template with volume + service definitions
 ├── vm.sh                # Wrapper script
 └── .gitignore
 ```
 
-Workflow: Run `./vm.sh run /path/to/project` to start a sandboxed container with the project mounted at `/workspace`. The script generates a per-project `docker-compose.yml` in a `.vm/` directory alongside the project, using the template from `agent-vm/docker-compose.yml`.
+Workflow: Run `./vm.sh run /path/to/project` to start a sandboxed container with the project mounted at `/workspace`. The script generates a per-project `docker-compose.yml` in a `.vm/` directory alongside the project, using the template from `agent-sandbox/docker-compose.yml`.
 
 ### Docker Image
 
@@ -43,7 +43,7 @@ Based on `debian:bookworm`.
 
 ### Volume Strategy
 
-- **`agent-vm-config`** — Docker named volume for persistent agent configuration, skills, and caches. Mounted at `/home/agent/.agent-config`, with symlinks to `~/.config/opencode`, `~/.agents/skills`, `~/.opencode/skills`, and `~/.cache/opencode` so both agents find their config and skills.
+- **`agent-sandbox-config`** — Docker named volume for persistent agent configuration, skills, and caches. Mounted at `/home/agent/.agent-config`, with symlinks to `~/.config/opencode`, `~/.agents/skills`, `~/.opencode/skills`, and `~/.cache/opencode` so both agents find their config and skills.
 - **Project directories** — bind-mounted read-write at `/workspace`
 - **Host home directory** — not mounted; container cannot see SSH keys, passwords, or other projects
 

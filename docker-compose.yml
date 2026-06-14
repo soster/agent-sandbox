@@ -1,14 +1,14 @@
 services:
-  agent-vm:
+  agent-sandbox:
     image: agent-sandbox:latest
     build: .
     working_dir: /workspace
     volumes:
-      - agent-vm-config:/home/agent/.agent-config
+      - agent-sandbox-config:/home/agent/.agent-config
     environment:
       - HOME=/home/agent
     stdin_open: true
     tty: true
 
 volumes:
-  agent-vm-config:
+  agent-sandbox-config:

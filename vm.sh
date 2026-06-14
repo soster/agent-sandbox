@@ -137,13 +137,13 @@ generate_compose() {
 
     {
         echo "services:"
-        echo "  agent-vm:"
+        echo "  agent-sandbox:"
         echo "    image: ${IMAGE_NAME}:latest"
         echo "    container_name: ${name}"
         echo "    working_dir: /workspace"
         echo "    volumes:"
         echo "      - ${project}:/workspace"
-        echo "      - agent-vm-config:/home/agent/.agent-config"
+        echo "      - agent-sandbox-config:/home/agent/.agent-config"
         echo "    environment:"
         echo "      - HOME=/home/agent"
 
@@ -169,7 +169,7 @@ generate_compose() {
 
         echo ""
         echo "volumes:"
-        echo "  agent-vm-config:"
+        echo "  agent-sandbox-config:"
     } > "$compose_file"
 
     echo "$compose_file"
@@ -318,7 +318,7 @@ cmd_config() {
     echo "Starting config management shell..."
     echo "Config volume mounted at /home/agent/.agent-config"
     docker run --rm -it \
-        -v agent-vm-config:/home/agent/.agent-config \
+        -v agent-sandbox-config:/home/agent/.agent-config \
         "${IMAGE_NAME}:latest" \
         bash
 }
