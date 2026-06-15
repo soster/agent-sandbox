@@ -175,7 +175,7 @@ This adds `mini` → `192.168.178.138` to the container's `/etc/hosts`, so your 
 
 ### Using `.env` Files
 
-For `vm.sh run`, Docker Compose automatically reads `<project>/.env`. For `claude` and `opencode` commands, `vm.sh` also loads `<project>/.env` automatically. CLI flags (`-e`) override `.env` values.
+`vm.sh` loads `<project>/.env` automatically for the `run`, `claude`, and `opencode` commands. Surrounding quotes around values are stripped, and CLI flags (`-e`) override `.env` values.
 
 Example `~/git/my-project/.env`:
 ```

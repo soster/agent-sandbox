@@ -39,24 +39,27 @@ container_name() {
 }
 
 host_dns() {
-    # Extract IPv4 nameservers from /etc/resolv.conf for host DNS forwarding
-    grep '^nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}' | grep -E '^[0-9]+\.' | tr '\n' ',' | sed 's/,$//'
+    # Extract IPv4 nameservers from /etc/resolv.conf for host DNS forwarding.
+    # Loopback addresses (127.x) are dropped: they point at a resolver on the
+    # host, which inside the container resolves to the container itself.
+    grep '^nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}' \
+        | grep -E '^[0-9]+\.' | grep -vE '^127\.' | tr '\n' ',' | sed 's/,$//'
 }
 
 extra_hosts_from_env() {
-    # Extract HOST_EXTRA_HOSTS from parsed env vars (format: "host:ip,host2:ip2")
+    # Extract HOST_EXTRA_HOSTS from parsed env vars (format: "host:ip,host2:ip2").
+    # A missing key makes grep exit non-zero; tolerate it so set -e/pipefail
+    # don't abort the caller.
     local env_vars="$1"
-    local value
-    value=$(echo "$env_vars" | grep '^HOST_EXTRA_HOSTS=' | head -1 | cut -d= -f2-)
-    echo "$value"
+    echo "$env_vars" | grep '^HOST_EXTRA_HOSTS=' | head -1 | cut -d= -f2- || true
 }
 
 extra_hosts_from_file() {
-    # Extract HOST_EXTRA_HOSTS from project/.env file
+    # Extract HOST_EXTRA_HOSTS from project/.env file (tolerate a missing key)
     local project="$1"
     local env_file="$project/.env"
     if [ -f "$env_file" ]; then
-        grep '^HOST_EXTRA_HOSTS=' "$env_file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'"
+        grep '^HOST_EXTRA_HOSTS=' "$env_file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true
     fi
 }
 
@@ -78,9 +81,63 @@ load_env_file() {
             [[ -z "${line// }" ]] && continue
             # Extract key=value
             if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*) ]]; then
-                echo "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
+                local key="${BASH_REMATCH[1]}"
+                local value="${BASH_REMATCH[2]}"
+                # Strip a single pair of surrounding quotes, if present
+                if [[ "$value" =~ ^\"(.*)\"$ ]]; then
+                    value="${BASH_REMATCH[1]}"
+                elif [[ "$value" =~ ^\'(.*)\'$ ]]; then
+                    value="${BASH_REMATCH[1]}"
+                fi
+                echo "${key}=${value}"
             fi
         done < "$env_file"
+    fi
+}
+
+# Populate the global EXTRA_DOCKER_ARGS array with --dns, --add-host, and -e
+# flags derived from host DNS, CLI -e vars, and the project's .env file.
+# CLI -e values are emitted after .env values so they take precedence.
+# Args: <project> <cli_env_vars>
+build_network_env_args() {
+    local project="$1"
+    local cli_env="$2"
+    EXTRA_DOCKER_ARGS=()
+
+    local dns_servers dns
+    dns_servers=$(host_dns)
+    if [ -n "$dns_servers" ]; then
+        IFS=',' read -ra DNS_ARR <<< "$dns_servers"
+        for dns in "${DNS_ARR[@]}"; do
+            EXTRA_DOCKER_ARGS+=("--dns" "$dns")
+        done
+    fi
+
+    # extra hosts: CLI -e first, then .env (first /etc/hosts match wins, so CLI overrides)
+    local cli_hosts file_hosts eh eh_list
+    cli_hosts=$(extra_hosts_from_env "$cli_env")
+    file_hosts=$(extra_hosts_from_file "$project")
+    for eh_list in "$cli_hosts" "$file_hosts"; do
+        if [ -n "$eh_list" ]; then
+            IFS=',' read -ra EH_ARR <<< "$eh_list"
+            for eh in "${EH_ARR[@]}"; do
+                EXTRA_DOCKER_ARGS+=("--add-host" "$eh")
+            done
+        fi
+    done
+
+    # env vars: .env file first (minus HOST_EXTRA_HOSTS), CLI -e last so CLI overrides
+    local env_file_vars env_var
+    env_file_vars=$(filter_env_var "HOST_EXTRA_HOSTS" "$(load_env_file "$project")")
+    if [ -n "$env_file_vars" ]; then
+        while IFS= read -r env_var; do
+            [ -n "$env_var" ] && EXTRA_DOCKER_ARGS+=(-e "$env_var")
+        done <<< "$env_file_vars"
+    fi
+    if [ -n "$cli_env" ]; then
+        while IFS= read -r env_var; do
+            [ -n "$env_var" ] && EXTRA_DOCKER_ARGS+=(-e "$env_var")
+        done <<< "$cli_env"
     fi
 }
 
@@ -194,6 +251,21 @@ generate_compose() {
         echo "    environment:"
         echo "      - HOME=/home/agent"
 
+        # env vars: project/.env first (minus HOST_EXTRA_HOSTS), CLI -e last so CLI overrides.
+        # These must be emitted before the sibling dns:/extra_hosts: keys below.
+        local env_file_vars
+        env_file_vars=$(filter_env_var "HOST_EXTRA_HOSTS" "$(load_env_file "$project")")
+        if [ -n "$env_file_vars" ]; then
+            while IFS= read -r env_var; do
+                [ -n "$env_var" ] && echo "      - ${env_var}"
+            done <<< "$env_file_vars"
+        fi
+        if [ -n "$env_vars" ]; then
+            echo "$env_vars" | while IFS= read -r env_var; do
+                [ -n "$env_var" ] && echo "      - ${env_var}"
+            done
+        fi
+
         local dns_servers
         dns_servers=$(host_dns)
         if [ -n "$dns_servers" ]; then
@@ -204,19 +276,19 @@ generate_compose() {
             done
         fi
 
-        local extra_hosts
-        extra_hosts=$(extra_hosts_from_env "$env_vars")
-        if [ -n "$extra_hosts" ]; then
+        # extra hosts: CLI -e first, then project/.env (first match wins, so CLI overrides)
+        local cli_hosts file_hosts eh_list
+        cli_hosts=$(extra_hosts_from_env "$env_vars")
+        file_hosts=$(extra_hosts_from_file "$project")
+        if [ -n "$cli_hosts" ] || [ -n "$file_hosts" ]; then
             echo "    extra_hosts:"
-            IFS=',' read -ra EH_ARR <<< "$extra_hosts"
-            for eh in "${EH_ARR[@]}"; do
-                echo "      - ${eh}"
-            done
-        fi
-
-        if [ -n "$env_vars" ]; then
-            echo "$env_vars" | while IFS= read -r env_var; do
-                [ -n "$env_var" ] && echo "      - ${env_var}"
+            for eh_list in "$cli_hosts" "$file_hosts"; do
+                if [ -n "$eh_list" ]; then
+                    IFS=',' read -ra EH_ARR <<< "$eh_list"
+                    for eh in "${EH_ARR[@]}"; do
+                        echo "      - ${eh}"
+                    done
+                fi
             done
         fi
 
@@ -302,51 +374,9 @@ cmd_claude() {
     docker_args+=(-v "${HOME}/.config/opencode:/home/agent/.config/opencode")
     docker_args+=(-e "HOME=/home/agent")
 
-    local dns_servers
-    dns_servers=$(host_dns)
-    if [ -n "$dns_servers" ]; then
-        IFS=',' read -ra DNS_ARR <<< "$dns_servers"
-        for dns in "${DNS_ARR[@]}"; do
-            docker_args+=("--dns" "$dns")
-        done
-    fi
-
-    local extra_hosts
-    extra_hosts=$(extra_hosts_from_env "$PARSED_ENV")
-    if [ -n "$extra_hosts" ]; then
-        IFS=',' read -ra EH_ARR <<< "$extra_hosts"
-        for eh in "${EH_ARR[@]}"; do
-            docker_args+=("--add-host" "$eh")
-        done
-    fi
-
-    # Load .env file from project directory
-    local env_file_vars
-    env_file_vars=$(load_env_file "$project")
-
-    # Also check .env for HOST_EXTRA_HOSTS
-    local file_extra_hosts
-    file_extra_hosts=$(echo "$env_file_vars" | grep '^HOST_EXTRA_HOSTS=' | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
-    if [ -n "$file_extra_hosts" ]; then
-        IFS=',' read -ra EH_ARR <<< "$file_extra_hosts"
-        for eh in "${EH_ARR[@]}"; do
-            docker_args+=("--add-host" "$eh")
-        done
-    fi
-
-    # Filter HOST_EXTRA_HOSTS from env vars
-    env_file_vars=$(echo "$env_file_vars" | grep -v '^HOST_EXTRA_HOSTS=' || true)
-
-    if [ -n "$env_file_vars" ]; then
-        while IFS= read -r env_var; do
-            [ -n "$env_var" ] && docker_args+=(-e "$env_var")
-        done <<< "$env_file_vars"
-    fi
-
-    if [ -n "$PARSED_ENV" ]; then
-        while IFS= read -r env_var; do
-            [ -n "$env_var" ] && docker_args+=(-e "$env_var")
-        done <<< "$PARSED_ENV"
+    build_network_env_args "$project" "$PARSED_ENV"
+    if [ ${#EXTRA_DOCKER_ARGS[@]} -gt 0 ]; then
+        docker_args+=("${EXTRA_DOCKER_ARGS[@]}")
     fi
 
     docker_args+=("${IMAGE_NAME}:latest" claude)
@@ -380,51 +410,9 @@ cmd_opencode() {
     docker_args+=(-v "${HOME}/.config/opencode:/home/agent/.config/opencode")
     docker_args+=(-e "HOME=/home/agent")
 
-    local dns_servers
-    dns_servers=$(host_dns)
-    if [ -n "$dns_servers" ]; then
-        IFS=',' read -ra DNS_ARR <<< "$dns_servers"
-        for dns in "${DNS_ARR[@]}"; do
-            docker_args+=("--dns" "$dns")
-        done
-    fi
-
-    local extra_hosts
-    extra_hosts=$(extra_hosts_from_env "$PARSED_ENV")
-    if [ -n "$extra_hosts" ]; then
-        IFS=',' read -ra EH_ARR <<< "$extra_hosts"
-        for eh in "${EH_ARR[@]}"; do
-            docker_args+=("--add-host" "$eh")
-        done
-    fi
-
-    # Load .env file from project directory
-    local env_file_vars
-    env_file_vars=$(load_env_file "$project")
-
-    # Also check .env for HOST_EXTRA_HOSTS
-    local file_extra_hosts
-    file_extra_hosts=$(echo "$env_file_vars" | grep '^HOST_EXTRA_HOSTS=' | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
-    if [ -n "$file_extra_hosts" ]; then
-        IFS=',' read -ra EH_ARR <<< "$file_extra_hosts"
-        for eh in "${EH_ARR[@]}"; do
-            docker_args+=("--add-host" "$eh")
-        done
-    fi
-
-    # Filter HOST_EXTRA_HOSTS from env vars
-    env_file_vars=$(echo "$env_file_vars" | grep -v '^HOST_EXTRA_HOSTS=' || true)
-
-    if [ -n "$env_file_vars" ]; then
-        while IFS= read -r env_var; do
-            [ -n "$env_var" ] && docker_args+=(-e "$env_var")
-        done <<< "$env_file_vars"
-    fi
-
-    if [ -n "$PARSED_ENV" ]; then
-        while IFS= read -r env_var; do
-            [ -n "$env_var" ] && docker_args+=(-e "$env_var")
-        done <<< "$PARSED_ENV"
+    build_network_env_args "$project" "$PARSED_ENV"
+    if [ ${#EXTRA_DOCKER_ARGS[@]} -gt 0 ]; then
+        docker_args+=("${EXTRA_DOCKER_ARGS[@]}")
     fi
 
     docker_args+=("${IMAGE_NAME}:latest" opencode)
