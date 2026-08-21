@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nano \
     jq \
     less \
+    ripgrep \
     tree \
     tmux \
     sudo \
@@ -25,8 +26,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# pi requires Node >= 22.19; the NodeSource LTS line above satisfies that.
 RUN npm install -g @anthropic-ai/claude-code \
-    && npm install -g opencode-ai
+    && npm install -g opencode-ai \
+    && npm install -g @earendil-works/pi-coding-agent
 
 RUN git config --global user.email "agent@agent-sandbox.local" \
     && git config --global user.name "Agent"

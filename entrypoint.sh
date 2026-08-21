@@ -10,38 +10,28 @@ fi
 
 mkdir -p "$CONFIG_DIR"
 
-# Claude Code config at ~/.claude
-if [ ! -d "$HOME/.claude" ]; then
-    ln -s "$CONFIG_DIR/claude" "$HOME/.claude"
-fi
-mkdir -p "$CONFIG_DIR/claude"
+# Point <path> at $CONFIG_DIR/<name> so the agent's config lives in the
+# persistent volume. Idempotent: an existing path (symlink or real directory,
+# e.g. a bind mount) is left alone.
+link_config() {
+    local path="$1"
+    local name="$2"
 
-# OpenCode config at ~/.config/opencode
-if [ ! -d "$HOME/.config/opencode" ]; then
-    mkdir -p "$HOME/.config"
-    ln -s "$CONFIG_DIR/opencode" "$HOME/.config/opencode"
-fi
-mkdir -p "$CONFIG_DIR/opencode"
+    if [ ! -d "$path" ]; then
+        mkdir -p "$(dirname "$path")"
+        ln -s "$CONFIG_DIR/$name" "$path"
+    fi
+    mkdir -p "$CONFIG_DIR/$name"
+}
 
-# Claude Code skills at ~/.agents/skills
-if [ ! -d "$HOME/.agents/skills" ]; then
-    mkdir -p "$HOME/.agents"
-    ln -s "$CONFIG_DIR/agents-skills" "$HOME/.agents/skills"
-fi
-mkdir -p "$CONFIG_DIR/agents-skills"
+link_config "$HOME/.claude"          claude           # Claude Code config
+link_config "$HOME/.config/opencode" opencode         # OpenCode config
+link_config "$HOME/.pi"              pi               # pi config (reads ~/.pi/agent)
+link_config "$HOME/.agents/skills"   agents-skills    # Claude Code skills
+link_config "$HOME/.opencode/skills" opencode-skills  # OpenCode skills
+link_config "$HOME/.cache/opencode"  cache-opencode   # OpenCode cache
 
-# OpenCode skills at ~/.opencode/skills
-if [ ! -d "$HOME/.opencode/skills" ]; then
-    mkdir -p "$HOME/.opencode"
-    ln -s "$CONFIG_DIR/opencode-skills" "$HOME/.opencode/skills"
-fi
-mkdir -p "$CONFIG_DIR/opencode-skills"
-
-# OpenCode cache at ~/.cache/opencode
-if [ ! -d "$HOME/.cache/opencode" ]; then
-    mkdir -p "$HOME/.cache"
-    ln -s "$CONFIG_DIR/cache-opencode" "$HOME/.cache/opencode"
-fi
-mkdir -p "$CONFIG_DIR/cache-opencode"
+# pi keeps settings, auth, packages, skills and sessions under ~/.pi/agent
+mkdir -p "$CONFIG_DIR/pi/agent"
 
 exec "$@"
