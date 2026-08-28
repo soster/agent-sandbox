@@ -1,16 +1,16 @@
 # agent-sandbox
 
-Sandboxed Docker environment for running AI coding agents (Claude Code, OpenCode) in isolation from your host system.
+Sandboxed Docker environment for running AI coding agents (Claude Code, OpenCode, pi) in isolation from your host system.
 
 ## Why
 
 Coding agents run with full filesystem access on your machine — including SSH keys, dotfiles, passwords, and other projects. Agent Sandbox gives agents a complete dev environment while hiding everything else.
 
 **What agents get:**
-- Full shell with common tools (bash, git, curl, vim, jq, tmux, tree, ...)
+- Full shell with common tools (bash, git, curl, vim, jq, ripgrep, tmux, tree, ...)
 - Python 3 with pip and venv
 - Node.js LTS with npm
-- Claude Code and OpenCode pre-installed
+- Claude Code, OpenCode and pi pre-installed
 - Full outbound internet access
 - Your project directory mounted at `/workspace`
 
@@ -52,6 +52,7 @@ docker build -t agent-sandbox:latest .
 | `./vm.sh run <project>` | Start container with project mounted |
 | `./vm.sh claude <project>` | Start container and run Claude Code |
 | `./vm.sh opencode <project>` | Start container and run OpenCode |
+| `./vm.sh pi <project>` | Start container and run pi |
 | `./vm.sh exec <project> <cmd>` | Run command in running container |
 | `./vm.sh stop <project>` | Stop container |
 | `./vm.sh logs <project>` | View container logs |
@@ -65,7 +66,18 @@ docker build -t agent-sandbox:latest .
 | `-p host:container` | Map port (repeatable) |
 | `-e KEY=VALUE` | Set environment variable (repeatable) |
 | `-e HOST_EXTRA_HOSTS="host:ip"` | Add static hostname entries (comma-separated) |
-| `-- <cmd>` | Override default command (`run` only) |
+| `-- <args>` | Pass arguments to the agent, or override the command (`run`) |
+
+`HOST_EXTRA_HOSTS` configures the sandbox itself and is never passed into the
+container as an environment variable.
+
+Everything after `--` goes to the agent verbatim, so any of its own flags work:
+
+```bash
+./vm.sh pi ~/git/my-project -- --provider anthropic --thinking high
+./vm.sh claude ~/git/my-project -- --model opus
+./vm.sh run ~/git/my-project -- npm test
+```
 
 ## Examples
 
@@ -83,6 +95,11 @@ docker build -t agent-sandbox:latest .
 **Run OpenCode:**
 ```bash
 ./vm.sh opencode ~/git/my-project
+```
+
+**Run pi:**
+```bash
+./vm.sh pi ~/git/my-project
 ```
 
 **Run OpenCode with local network host:**
@@ -127,6 +144,7 @@ Each project gets its own container with a unique name derived from the project 
 # 3. Or use the convenience commands (interactive TTY)
 ./vm.sh claude ~/git/my-project -e ANTHROPIC_API_KEY=sk-ant-...
 ./vm.sh opencode ~/git/my-project
+./vm.sh pi ~/git/my-project
 
 # 4. When done, stop or remove
 ./vm.sh stop ~/git/my-project   # keeps container for restart
@@ -175,7 +193,7 @@ This adds `mini` → `192.168.178.138` to the container's `/etc/hosts`, so your 
 
 ### Using `.env` Files
 
-`vm.sh` loads `<project>/.env` automatically for the `run`, `claude`, and `opencode` commands. Surrounding quotes around values are stripped, and CLI flags (`-e`) override `.env` values.
+`vm.sh` loads `<project>/.env` automatically for the `run`, `claude`, `opencode`, and `pi` commands. Surrounding quotes around values are stripped, and CLI flags (`-e`) override `.env` values.
 
 Example `~/git/my-project/.env`:
 ```
@@ -188,6 +206,39 @@ Then just run:
 ./vm.sh opencode ~/git/my-project
 ```
 
+## Running pi
+
+[pi](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) is installed in the image and stores everything under `~/.pi/agent` — settings, credentials, installed packages, skills and sessions. That directory is symlinked into the config volume, so it is **isolated from your host `~/.pi`** and persists across containers.
+
+A fresh config volume has no pi settings, and pi defaults to the `google` provider. On the first run, either pick a provider on the command line:
+
+```bash
+./vm.sh pi ~/git/my-project -- --provider anthropic
+```
+
+or run `/login` inside pi to store a key in `~/.pi/agent/auth.json`. Either way, write the choice into `~/.pi/agent/settings.json` once and later runs need no flags:
+
+```bash
+./vm.sh config
+mkdir -p ~/.agent-config/pi/agent
+cat > ~/.agent-config/pi/agent/settings.json <<'EOF'
+{
+  "defaultProvider": "anthropic",
+  "defaultModel": "claude-sonnet-5"
+}
+EOF
+```
+
+API keys are picked up from the environment, so a project `.env` containing `ANTHROPIC_API_KEY=...` is enough to authenticate.
+
+Installing pi packages works normally and persists, because `~/.pi/agent/npm` lives in the volume:
+
+```bash
+./vm.sh pi ~/git/my-project -- install npm:@tintinweb/pi-subagents
+```
+
+To point pi at a local inference server, combine `HOST_EXTRA_HOSTS` with pi's `llamaServerUrl` / provider settings — see [Connecting to Local AI Providers](#connecting-to-local-ai-providers).
+
 ## Architecture
 
 ```
@@ -196,6 +247,7 @@ agent-sandbox/
 ├── docker-compose.yml      # Template (reference only)
 ├── entrypoint.sh           # Sets up config symlinks on startup
 ├── vm.sh                   # Wrapper script for all operations
+├── tests/vm-test.sh        # Unit tests for vm.sh (no Docker needed)
 └── .gitignore
 ```
 
@@ -206,7 +258,7 @@ agent-sandbox/
    - Your project directory → `/workspace` (read-write)
    - `agent-sandbox-config` Docker volume → `/home/agent/.agent-config`
    - Your host `~/.config/opencode` → `/home/agent/.config/opencode` (bind mount)
-3. The entrypoint creates symlinks so Claude Code and OpenCode find their config in the shared volume
+3. The entrypoint creates symlinks so Claude Code, OpenCode and pi find their config in the shared volume
 4. Host DNS servers are forwarded into the container, enabling mDNS resolution for local network hosts
 5. The container runs as a non-root user (`agent`) with passwordless sudo
 
@@ -218,6 +270,7 @@ The `agent-sandbox-config` Docker volume persists agent configuration, skills, a
 |---------|--------|---------|
 | `~/.claude` | `.agent-config/claude` | Claude Code |
 | `~/.agents/skills` | `.agent-config/agents-skills` | Claude Code |
+| `~/.pi` | `.agent-config/pi` | pi |
 | `~/.opencode/skills` | `.agent-config/opencode-skills` | OpenCode |
 | `~/.cache/opencode` | `.agent-config/cache-opencode` | OpenCode |
 
@@ -238,7 +291,7 @@ Container names are derived from the project path by replacing `/` and non-alpha
 
 | Project Path | Container Name |
 |--------------|----------------|
-| `~/git/my-project` | `Users_oster_git_my-project` |
+| `~/git/my-project` | `Users_oster_git_my_project` |
 | `~/Documents/work/app` | `Users_oster_Documents_work_app` |
 
 ## Agent Skills
@@ -247,6 +300,7 @@ Skills extend agent behavior with specialized instructions and tools. They're st
 
 - **Claude Code skills:** `~/.agents/skills/` (symlinked from `.agent-config/agents-skills`)
 - **OpenCode skills:** `~/.opencode/skills/` (symlinked from `.agent-config/opencode-skills`)
+- **pi skills:** `~/.pi/agent/skills/` (symlinked from `.agent-config/pi`)
 
 Manage skills from the config shell:
 
@@ -255,6 +309,21 @@ Manage skills from the config shell:
 # Inside the shell:
 ls ~/.agent-config/agents-skills/
 ls ~/.agent-config/opencode-skills/
+```
+
+## Testing
+
+`tests/vm-test.sh` unit-tests the `vm.sh` helpers — `.env` parsing, CLI/`.env` precedence, DNS filtering, `HOST_EXTRA_HOSTS` handling, argument parsing and compose generation. It sources `vm.sh` (which only dispatches when executed directly) and needs no Docker:
+
+```bash
+./tests/vm-test.sh
+```
+
+Smoke-test the image itself after a rebuild:
+
+```bash
+docker build -t agent-sandbox:latest .
+docker run --rm agent-sandbox:latest bash -c 'claude --version && opencode --version && pi --version'
 ```
 
 ## Security
@@ -321,6 +390,10 @@ The entrypoint handles this automatically with `sudo chown`. If it persists, reb
 **`/tmp` projects don't mount on macOS**
 
 Colima doesn't share `/tmp` with the VM by default. Use projects in `~/` or another shared directory.
+
+**pi starts with the wrong provider**
+
+A fresh config volume has no `~/.pi/agent/settings.json`, so pi falls back to its `google` default. Pass `-- --provider <name>` or write a settings file — see [Running pi](#running-pi).
 
 **OpenCode / Claude Code exit immediately**
 
